@@ -1,20 +1,20 @@
-# Node.js 16 をベースに
+# Node.js 16 を使用
 FROM node:16
 
-# 作業ディレクトリを作成
+# 作業ディレクトリ
 WORKDIR /app
 
-# 依存ファイルをコピー
+# package.json と package-lock.json をコピー
 COPY package*.json ./
 
-# 依存関係をインストール
+# 依存関係のインストール
 RUN npm install
 
-# アプリのコードをコピー
+# アプリの全ファイルをコピー
 COPY . .
 
-# ポート（必要に応じて。例えば Express が使うなら 3000）
+# 必要なら公開ポート（Express を使ってるなら）
 EXPOSE 3000
 
-# アプリを起動
-CMD ["npm", "start"]
+# アプリ起動
+CMD ["node", "main.mjs"]
