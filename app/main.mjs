@@ -175,7 +175,7 @@ async function updateRoleForMember(member) {
       console.log(`${member.user.tag} から「未認証」ロールを削除しました`);
       return true;
     } else if (!hasNewUserRole && !hasUnauthenticatedRole && !hasLv2Role && !hasLv3Role) {
-      // メンバーが「新規さん」「Lv2」「Lv3」いずれのロールも持っておらず、「未認証」ロールも持っていない場合、「未認証」を追加
+      // メンバーが「新規さん」、「Lv2」、「Lv3」いずれのロールも持っておらず、「未認証」ロールも持っていない場合、「未認証」を追加
       await member.roles.add(UNAUTHENTICATED_ROLE_ID);
       console.log(`${member.user.tag} に「未認証」ロールを追加しました`);
       return true;
@@ -236,26 +236,53 @@ async function notifyUnauthenticatedUsers(client) {
   }
 }
 
-Notification.sync({ alter: true });
-YoutubeFeeds.sync({ alter: true });
-YoutubeNotifications.sync({ alter: true });
-Points.sync({ alter: true }); // ポイントテーブルを同期
+// データベースの同期を安全に行う
+async function initializeDatabase() {
+  try {
+    console.log("[DB] データベーステーブルの同期を開始します...");
+    
+    // 既存のデータを保持したまま、テーブル構造のみを更新
+    await Notification.sync({ alter: true });
+    console.log("[DB] Notificationテーブルの同期が完了しました");
+    
+    await YoutubeFeeds.sync({ alter: true });
+    console.log("[DB] YoutubeFeedsテーブルの同期が完了しました");
+    
+    await YoutubeNotifications.sync({ alter: true });
+    console.log("[DB] YoutubeNotificationsテーブルの同期が完了しました");
+    
+    // ポイントテーブルも安全に同期（force: falseを確実にする）
+    await Points.sync({ alter: true, force: false });
+    console.log("[DB] Pointsテーブルの同期が完了しました（データは保持されます）");
+    
+    console.log("[DB] 全データベーステーブルの同期が完了しました");
+  } catch (error) {
+    console.error("[DB] データベースの初期化中にエラーが発生しました:", error);
+    throw error;
+  }
+}
 
 (async () => {
   try {
     console.log("[INIT] 起動プロセスを開始します...");
     
-    // まずコマンドを登録
+    // まずデータベースを初期化
+    console.log("[INIT] データベースの初期化を開始します...");
+    await initializeDatabase();
+    console.log("[INIT] データベースの初期化が完了しました");
+    
+    // 次にコマンドを登録
     console.log("[INIT] コマンド登録を開始します...");
     await CommandsRegister();
     console.log("[INIT] コマンド登録が完了しました");
     
-    // 次にBotをログイン
+    // 最後にBotをログイン
     console.log("[INIT] Discordへのログインを開始します...");
     await client.login(process.env.TOKEN);
     console.log("[INIT] ログインが完了しました");
   } catch (error) {
     console.error("[INIT] 起動プロセスでエラーが発生しました:", error);
+    process.exit(1); // エラーが発生した場合は終了
   }
 })();
 
@@ -312,9 +339,9 @@ async function checkFeed(channelFeedUrl) {
       .setColor(0xcd201f)
       .setAuthor({ name: v.author, url: `https://www.youtube.com/channel/${youtubeChannelId}`})
       .setTitle(v.title)
-	    .setURL(v.link)
+      .setURL(v.link)
       .setDescription(youtubeVideo.description)
-	    .setImage(youtubeVideo.thumbnails.best)
+      .setImage(youtubeVideo.thumbnails.best)
       .setTimestamp(new Date(v.isoDate));
     
     //.setThumbnail(youtubeChannel.thumbnails.best)
