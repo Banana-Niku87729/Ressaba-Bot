@@ -6,13 +6,15 @@ import CommandsRegister from "./regist-commands.mjs";
 import Notification from "./models/notification.mjs";
 import YoutubeFeeds from "./models/youtubeFeeds.mjs";
 import YoutubeNotifications from "./models/youtubeNotifications.mjs";
-import Points from "./models/points.mjs"; // ポイントモデルをインポート
+import Points from "./models/points.mjs";
 
 import Sequelize from "sequelize";
 import Parser from 'rss-parser';
 const parser = new Parser();
 
 import { Client as Youtubei, MusicClient } from "youtubei";
+import googleTrends from 'google-trends-api';
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const youtubei = new Youtubei();
 const NEW_USER_ROLE_ID = '1116733355615064104'; // "新規さん" role ID
@@ -20,7 +22,15 @@ const UNAUTHENTICATED_ROLE_ID = '1357318059391717416'; // "未認証" role ID
 const LV2_ROLE_ID = '1116734119909523587'; // "Lv2" role ID
 const LV3_ROLE_ID = '1181793540041347173'; // "Lv3" role ID
 const NOTIFICATION_CHANNEL_ID = '1284878235309572127';
+const TRENDS_CHANNEL_ID = '1116735137594474577'; // Google Trendsを投稿するチャンネル
 const CHECK_INTERVAL = 15 * 24 * 60 * 60 * 1000; // 15 days
+const TRENDS_INTERVAL = 60 * 60 * 1000; // 1 hour
+
+// Gemini AI初期化
+let genAI;
+if (process.env.GEMINI_API_KEY) {
+  genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+}
 
 let postCount = 0;
 const app = express();
@@ -106,6 +116,17 @@ client.on("ready", async () => {
     await checkAndUpdateRoles(client);
     await notifyUnauthenticatedUsers(client);
   }, CHECK_INTERVAL);
+
+  // Google Trendsの定期投稿をセットアップ（1時間ごと）
+  setInterval(async () => {
+    console.log('Checking Google Trends...');
+    await postTrendingTopics(client);
+  }, TRENDS_INTERVAL);
+
+  // 初回実行（起動時にも投稿）
+  setTimeout(async () => {
+    await postTrendingTopics(client);
+  }, 10000); // 10秒後に初回実行
 });
 
 // 新規メンバーが参加したときにロールをチェック
@@ -123,6 +144,131 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     await updateRoleForMember(newMember);
   }
 });
+
+// Google Trendsから話題を取得して投稿する関数
+async function postTrendingTopics(client) {
+  try {
+    const channel = client.channels.cache.get(TRENDS_CHANNEL_ID);
+    if (!channel) {
+      console.error('Trendsチャンネルが見つかりません');
+      return;
+    }
+
+    console.log('Google Trendsから話題を取得中...');
+    
+    // 日本の今日のトレンドを取得
+    const trendsData = await googleTrends.dailyTrends({
+      trendDate: new Date(),
+      geo: 'JP', // 日本
+    });
+
+    const trends = JSON.parse(trendsData);
+    const trendingSearches = trends.default.trendingSearchesDays[0].trendingSearches;
+
+    if (!trendingSearches || trendingSearches.length === 0) {
+      console.log('トレンドデータが見つかりませんでした');
+      return;
+    }
+
+    // 上位5つのトレンドを選択
+    const topTrends = trendingSearches.slice(0, 5);
+    
+    // Gemini AIでネガティブな話題をフィルタリング
+    const filteredTrends = await filterNegativeTopics(topTrends);
+
+    if (filteredTrends.length === 0) {
+      console.log('ポジティブな話題が見つかりませんでした');
+      return;
+    }
+
+    // ランダムに1つの話題を選択
+    const selectedTrend = filteredTrends[Math.floor(Math.random() * filteredTrends.length)];
+    
+    // トレンドの詳細情報を取得
+    const trendTitle = selectedTrend.title.query;
+    const formattedVolume = selectedTrend.formattedTraffic || '情報なし';
+    
+    // 関連記事があれば取得
+    const relatedArticles = selectedTrend.articles || [];
+    const topArticle = relatedArticles[0];
+
+    // Embedを作成
+    const embed = new EmbedBuilder()
+      .setColor(0x4285f4) // Googleブルー
+      .setTitle(`🔥 今話題: ${trendTitle}`)
+      .setDescription(`検索数: ${formattedVolume}`)
+      .setTimestamp()
+      .setFooter({ text: 'Google Trends より' });
+
+    // 関連記事があれば追加
+    if (topArticle) {
+      embed.addFields({
+        name: '📰 関連記事',
+        value: `[${topArticle.title}](${topArticle.url})`,
+        inline: false
+      });
+
+      // 記事の画像があれば設定
+      if (topArticle.image && topArticle.image.newsUrl) {
+        embed.setThumbnail(topArticle.image.newsUrl);
+      }
+    }
+
+    await channel.send({ embeds: [embed] });
+    console.log(`トレンド投稿完了: ${trendTitle}`);
+
+  } catch (error) {
+    console.error('Google Trendsの投稿でエラーが発生しました:', error);
+  }
+}
+
+// Gemini AIを使ってネガティブな話題をフィルタリング
+async function filterNegativeTopics(trends) {
+  if (!genAI) {
+    console.log('Gemini APIが設定されていません。フィルタリングなしで続行します。');
+    return trends;
+  }
+
+  try {
+    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    
+    const filteredTrends = [];
+    
+    for (const trend of trends) {
+      const query = trend.title.query;
+      
+      const prompt = `
+以下のトピックがネガティブな内容かどうかを判断してください。
+ネガティブな内容には以下が含まれます：
+- 事故、災害、死亡、病気
+- 政治的な対立や論争
+- 犯罪、暴力、戦争
+- スキャンダル、不祥事
+- その他、人を不快にさせる可能性のある内容
+
+判断結果は「POSITIVE」または「NEGATIVE」のみで答えてください。
+
+トピック: "${query}"
+`;
+
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      const judgement = response.text().trim().toUpperCase();
+      
+      console.log(`トピック「${query}」の判定: ${judgement}`);
+      
+      if (judgement.includes('POSITIVE')) {
+        filteredTrends.push(trend);
+      }
+    }
+    
+    return filteredTrends;
+  } catch (error) {
+    console.error('Gemini AIでのフィルタリング中にエラーが発生しました:', error);
+    // エラーの場合は元のトレンドをそのまま返す
+    return trends;
+  }
+}
 
 // 全ギルドメンバーのロールをチェックして更新
 async function checkAndUpdateRoles(client) {
