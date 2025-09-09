@@ -2,7 +2,10 @@
   "name": "pythonontop",
   "version": "1.0.0",
   "main": "main.mjs",
+  "type": "module",
   "scripts": {
+    "start": "node main.mjs",
+    "dev": "nodemon main.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -16,6 +19,10 @@
     "google-trends-api": "^4.9.2",
     "rss-parser": "^3.13.0",
     "sequelize": "^6.37.7",
+    "sqlite3": "^5.1.7",
     "youtubei": "^1.7.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
   }
 }
